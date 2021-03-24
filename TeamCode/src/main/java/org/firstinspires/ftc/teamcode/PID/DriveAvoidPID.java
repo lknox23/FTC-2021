@@ -8,10 +8,12 @@
 
 package org.firstinspires.ftc.teamcode.PID;
 
+import com.acmerobotics.roadrunner.control.PIDFController;
 import com.qualcomm.hardware.bosch.BNO055IMU;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.PIDCoefficients;
 import com.qualcomm.robotcore.hardware.TouchSensor;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
@@ -20,10 +22,11 @@ import org.firstinspires.ftc.robotcore.external.navigation.AxesReference;
 import org.firstinspires.ftc.robotcore.external.navigation.Orientation;
 import org.firstinspires.ftc.robotcore.external.navigation.Position;
 import org.firstinspires.ftc.robotcore.external.navigation.Velocity;
+import org.firstinspires.ftc.teamcode.PIDController;
 
-@Autonomous(name="Drive Avoid Imu", group="Exercises")
+@Autonomous(name="Drive Avoid PID", group="Exercises")
 //@Disabled
-public class DriveAvoidImu extends LinearOpMode
+public class DriveAvoidPID extends LinearOpMode
 {
     DcMotor                 leftMotor, rightMotor;
     TouchSensor             touch;
@@ -31,6 +34,8 @@ public class DriveAvoidImu extends LinearOpMode
     Orientation             lastAngles = new Orientation();
     double                  globalAngle, power = .30, correction;
     boolean                 aButton, bButton, touched;
+    PIDController           pidRotate, pidDrive;
+
 
     // called when init button is  pressed.
     @Override
@@ -61,6 +66,10 @@ public class DriveAvoidImu extends LinearOpMode
 
         imu.initialize(parameters);
 
+        pidRotate = new PIDController(.0022, .00002, 0);
+
+        pidDrive = new PIDController(.04, 0, 0);
+
         telemetry.addData("Mode", "calibrating...");
         telemetry.update();
 
@@ -84,12 +93,18 @@ public class DriveAvoidImu extends LinearOpMode
 
         sleep(1000);
 
+        //parameters for driving straight
+        pidDrive.setSetpoint(0);
+        pidDrive.setOutputRange(0, power);
+        pidDrive.setInputRange(-90, 90);
+        pidDrive.enable();
+
         // drive until end of period.
 
         while (opModeIsActive())
         {
             // Use gyro to drive in a straight line.
-            correction = checkDirection();
+            correction = pidDrive.performPID(getAngle());
 
             telemetry.addData("1 imu heading", lastAngles.firstAngle);
             telemetry.addData("2 global heading", globalAngle);
@@ -203,35 +218,53 @@ public class DriveAvoidImu extends LinearOpMode
         // restart imu movement tracking.
         resetAngle();
 
+        //degree cap at 359
+        if (Math.abs(degrees) > 359) degrees = (int) Math.copySign(359, degrees);
+
+        //PID controller, monitors turn angle with respect to target angle. See full desc here: "start pid controller. PID controller will monitor the turn angle with respect to the
+        //        // target angle and reduce power as we approach the target angle. This is to prevent the
+        //        // robots momentum from overshooting the turn after we turn off the power. The PID controller
+        //        // reports onTarget() = true when the difference between turn angle and target angle is within
+        //        // 1% of target (tolerance) which is about 1 degree. This helps prevent overshoot. Overshoot is
+        //        // dependant on the motor and gearing configuration, starting power, weight of the robot and the
+        //        // on target tolerance. If the controller overshoots, it will reverse the sign of the output
+        //        // turning the robot back toward the setpoint value."
+
+        pidRotate.reset();
+        pidRotate.setSetpoint(degrees);
+        pidRotate.setInputRange(0, degrees);
+        pidRotate.setOutputRange(0, power);
+        pidRotate.setTolerance(1);
+        pidRotate.enable();
+
         // getAngle() returns + when rotating counter clockwise (left) and - when rotating
         // clockwise (right).
 
         if (degrees < 0)
-        {   // turn right.
-            leftPower = power;
-            rightPower = -power;
-        }
-        else if (degrees > 0)
-        {   // turn left.
-            leftPower = -power;
-            rightPower = power;
-        }
-        else return;
-
-        // set power to rotate.
-        leftMotor.setPower(leftPower);
-        rightMotor.setPower(rightPower);
-
-        // rotate until turn is completed.
-        if (degrees < 0)
         {
             // On right turn we have to get off zero first.
-            while (opModeIsActive() && getAngle() == 0) {}
+            while (opModeIsActive() && getAngle() == 0)
+            {
+                leftMotor.setPower(power);
+                rightMotor.setPower(-power);
+                sleep(100);
+            }
 
-            while (opModeIsActive() && getAngle() > degrees) {}
+            do
+            {
+                power = pidRotate.performPID(getAngle()); // power will be - on right turn.
+                leftMotor.setPower(-power);
+                rightMotor.setPower(power);
+            } while (opModeIsActive() && !pidRotate.onTarget());
         }
         else    // left turn.
-            while (opModeIsActive() && getAngle() < degrees) {}
+            do
+            {
+                power = pidRotate.performPID(getAngle()); // power will be + on left turn.
+                leftMotor.setPower(-power);
+                rightMotor.setPower(power);
+            } while (opModeIsActive() && !pidRotate.onTarget());
+
 
         // turn the motors off.
         rightMotor.setPower(0);
